@@ -6,9 +6,9 @@ circumstances.
 from typing import Protocol, Optional
 
 import requests
-from requests import HTTPError, Timeout
+from requests import HTTPError, Timeout, ConnectionError as ConnError
 
-from wtforms import ValidationError
+from wtforms import ValidationError, StringField
 
 __version__ = "0.1"
 
@@ -50,13 +50,13 @@ class RecaptchaV2Validator:
 
     def __init__(
         self,
-        secret_key: str,
+        secret_key: Optional[str],
         request_timeout: float = 2000.0,
         get_remote_ip: GetRemoteIP = lambda _: None,
         make_error_msg: MakeErrorMessage = lambda _: "Captcha verification failed.",
         make_connection_error_msg: MakeErrorMessage = lambda _: "Verification service unavailable.",
         raise_on_connection_error: bool = False,
-        verfication_url: str = "https://www.google.com/recaptcha/api/siteverify",
+        verification_url: str = "https://www.google.com/recaptcha/api/siteverify",
     ):
         self.secret_key = secret_key
         self.request_timeout = request_timeout
@@ -64,7 +64,7 @@ class RecaptchaV2Validator:
         self.make_connection_error_msg = make_connection_error_msg
         self.get_remote_ip = get_remote_ip
         self.raise_on_connection_error = raise_on_connection_error
-        self.verification_url = verfication_url
+        self.verification_url = verification_url
 
     def _collect_data(self, form, field) -> dict:
         data = {}
@@ -83,6 +83,27 @@ class RecaptchaV2Validator:
                 self.verification_url, self._collect_data(form, field), timeout=self.request_timeout
             ).json()["success"]:
                 raise ValidationError(self.make_error_msg(form))
-        except (HTTPError, Timeout, ConnectionError):
+        except (HTTPError, Timeout, ConnError):
             if self.raise_on_connection_error:
                 raise ValidationError(self.make_connection_error_msg(form))
+
+
+try:
+    import wtforms_field_factory
+
+    class RecaptchaV2FormMixin:
+        """A form mixin that defines the recaptcha V2 field only if the secret key in the validator
+        instance is a truthy value."""
+
+        def __init__(self, validator: RecaptchaV2Validator):
+            self.validator = validator
+
+        @wtforms_field_factory.field(
+            name="g-recaptcha-response", enable_if=lambda self: self.validator.secret_key
+        )
+        def _captcha_v2_field(self):
+            return StringField(label="recaptcha", validators=[self.validator])
+
+
+except ImportError:
+    pass  # o.k., cannot use mixin
